@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>S3 PIN Search</title>
+  <link rel="icon" href="data:,">
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    #search-form {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    #pin-input {
+      flex: 1;
+      padding: 8px;
+    }
+    #date-input {
+      padding: 8px;
+    }
+    button {
+      padding: 8px 16px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    #results {
+      background-color: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      min-height: 100px;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    #status {
+      margin-bottom: 10px;
+    }
+    .error {
+      color: red;
+    }
+    .progress {
+      color: #666;
+      font-style: italic;
+    }
+    #stop-button {
+      background-color: #f44336;
+      display: none;
+    }
+  </style>
+
+</head>
+<body>
+  <h1>Search PIN in S3 Logs</h1>
+  <form id="search-form">
+    <input type="text" id="pin-input" placeholder="Enter PIN like IPAY338992910" required />
+    <input type="date" id="date-input" />
+    <button type="submit">Search</button>
+    <button type="button" id="stop-button">Stop Search</button>
+  </form>
+  <div id="status" class="progress"></div>
+  <pre id="results"></pre>
+<script>
+    let eventSource = null;
+    let retryCount = 0;
+    const maxRetries = 5;
+    let lastMessageTime = Date.now();
+    let heartbeatInterval;
+    let reconnectTimeout;
+    let isExplicitClose = false;
+    let filesProcessed = 0;
+    let matchesFound = 0;
+    let currentSearchUrl = '';
+
+    // DOM elements
+    const statusElement = document.getElementById('status');
+    const resultsElement = document.getElementById('results');
+    const stopButton = document.getElementById('stop-button');
+    const searchForm = document.getElementById('search-form');
+
+    // Form submission handler
+    searchForm.onsubmit = function(e) {
+        e.preventDefault();
+        startSearch();
+        return false;
+    };
+
+    // Stop button handler
+    stopButton.onclick = function() {
+        cleanupConnection();
+        statusElement.innerHTML = `<span class="error">Search stopped by user. Processed ${filesProcessed} files, found ${matchesFound} matches.</span>`;
+        stopButton.style.display = 'none';
+    };
+
+    function startSearch() {
+        const pin = document.getElementById('pin-input').value.trim();
+        const date = document.getElementById('date-input').value;
+        
+        if (!pin) {
+            statusElement.innerHTML = '<span class="error">Please enter a PIN to search</span>';
+            return;
+        }
+        
+        cleanupConnection();
+        
+        resultsElement.textContent = '';
+        statusElement.textContent = 'Starting large-scale search...';
+        retryCount = 0;
+        lastMessageTime = Date.now();
+        isExplicitClose = false;
+        filesProcessed = 0;
+        matchesFound = 0;
+        stopButton.style.display = 'inline-block';
+        
+        currentSearchUrl = window.location.hostname === 'localhost' 
+            ? `http://localhost:5000/search?pin=${encodeURIComponent(pin)}&date=${encodeURIComponent(date)}`
+            : `/search?pin=${encodeURIComponent(pin)}&date=${encodeURIComponent(date)}`;
+        
+        connectEventSource(currentSearchUrl);
+    }
+
+    function connectEventSource(url) {
+        eventSource = new EventSource(url);
+        
+        // Heartbeat check every 10 seconds
+        heartbeatInterval = setInterval(() => {
+            const timeSinceLastMessage = Date.now() - lastMessageTime;
+            if (timeSinceLastMessage > 45000 && !isExplicitClose) { // 45 seconds
+                statusElement.textContent = `Connection inactive (${Math.round(timeSinceLastMessage/1000)}s), reconnecting...`;
+                cleanupConnection();
+                scheduleReconnect(url);
+            }
+        }, 10000);
+        
+        eventSource.onopen = () => {
+            clearTimeout(reconnectTimeout);
+            retryCount = 0;
+            statusElement.textContent = 'Connected to search service...';
+            lastMessageTime = Date.now();
+            isExplicitClose = false;
+        };
+        
+        eventSource.onmessage = (event) => {
+            lastMessageTime = Date.now();
+            
+            if (event.data.trim() === ': keepalive') return;
+            
+            try {
+                const data = JSON.parse(event.data);
+                
+                if (data.error) {
+                    statusElement.innerHTML = `<span class="error">Error: ${data.error}</span>`;
+                    cleanupConnection();
+                    return;
+                }
+                
+                if (data.status === 'complete') {
+                    statusElement.textContent = `Search completed. Found ${data.count} matches in ${data.files_processed} files.`;
+                    cleanupConnection();
+                    stopButton.style.display = 'none';
+                    return;
+                }
+                
+                if (data.status === 'progress') {
+                    filesProcessed = data.files_processed;
+                    matchesFound = data.matches_found || matchesFound;
+                    statusElement.textContent = `Searching... Processed ${filesProcessed} files, found ${matchesFound} matches`;
+                    return;
+                }
+                
+                if (data.result) {
+                    resultsElement.textContent += data.result + '\n';
+                    matchesFound++;
+                    resultsElement.scrollTop = resultsElement.scrollHeight;
+                }
+            } catch (e) {
+                console.error("Error parsing event:", e);
+            }
+        };
+        
+        eventSource.addEventListener('close', () => {
+            if (!isExplicitClose) {
+                statusElement.textContent = 'Search completed by server';
+            }
+            cleanupConnection();
+            stopButton.style.display = 'none';
+        });
+        
+        eventSource.onerror = () => {
+            if (eventSource.readyState === EventSource.CLOSED && !isExplicitClose) {
+                statusElement.textContent = 'Connection interrupted, reconnecting...';
+                cleanupConnection();
+                scheduleReconnect(url);
+            }
+        };
+    }
+
+    function scheduleReconnect(url) {
+        if (retryCount < maxRetries) {
+            retryCount++;
+            const delay = Math.min(2000 * retryCount, 30000); // 2s, 4s, 6s... max 30s
+            statusElement.textContent += ` (Retry ${retryCount}/${maxRetries} in ${delay/1000}s)`;
+            reconnectTimeout = setTimeout(() => connectEventSource(url), delay);
+        } else {
+            statusElement.innerHTML = `<span class="error">Search stopped after ${maxRetries} retries. Processed ${filesProcessed} files, found ${matchesFound} matches.</span>`;
+            stopButton.style.display = 'none';
+        }
+    }
+
+    function cleanupConnection() {
+        clearInterval(heartbeatInterval);
+        clearTimeout(reconnectTimeout);
+        if (eventSource) {
+            isExplicitClose = true;
+            eventSource.close();
+            eventSource = null;
+        }
+    }
+
+    // Set default date to today
+    document.getElementById('date-input').valueAsDate = new Date();
+
+    // Clean up when page unloads
+    window.addEventListener('beforeunload', cleanupConnection);
+</script>
+
+</body>
+</html>
