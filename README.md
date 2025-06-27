@@ -2,7 +2,7 @@
 
 A web application for searching transaction logs stored in AWS S3 by PIN number.
 
-![Screenshot](screenshot.png) *(Optional: Add screenshot later)*
+![Screenshot](screenshot.png) 
 
 ## Features
 
