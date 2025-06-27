@@ -55,18 +55,45 @@
       display: none;
     }
   </style>
-
 </head>
 <body>
   <h1>Search PIN in S3 Logs</h1>
   <form id="search-form">
-    <input type="text" id="pin-input" placeholder="Enter PIN like IPAY338992910" required />
+    <select id="prefix-select">
+    	    <option value="SmartSwift">SmartSwift</option>
+	    <option value="9Pay">9Pay</option>
+	    <option value="DbsMoney">DbsMoney</option>
+	    <option value="EBL">EBL</option>
+	    <option value="Finmo">Finmo</option>
+	    <option value="FlashConnect">FlashConnect</option>
+	    <option value="FlexMoney">FlexMoney</option>
+	    <option value="HDFC">HDFC</option>
+	    <option value="InPay">InPay</option>
+	    <option value="Invoker">Invoker</option>
+	    <option value="ISendGlobalUSA">ISendGlobalUSA</option>
+	    <option value="MetroBank_api_log">MetroBank_api_log</option>
+	    <option value="metrobank_new">metrobank_new</option>
+	    <option value="Metrobank_new">Metrobank_new</option>
+	    <option value="Metrobank">Metrobank</option>
+	    <option value="MetroBank">MetroBank</option>
+	    <option value="Ripple">Ripple</option>
+	    <option value="Sampath">Sampath</option>
+	    <option value="TCI">TCI</option>
+	    <option value="TransferZ">TransferZ</option>
+	    <option value="UsiMoney">UsiMoney</option>
+	    <option value="YesBank">YesBank</option>
+	    <option value="yourpay">yourpay</option>
+	    <option value="YourPay">YourPay</option>
+	    <option value="Zai">Zai</option>
+    </select>
+    <input type="text" id="pin-input" placeholder="Enter PIN Number" required />
     <input type="date" id="date-input" />
     <button type="submit">Search</button>
     <button type="button" id="stop-button">Stop Search</button>
   </form>
   <div id="status" class="progress"></div>
   <pre id="results"></pre>
+
 <script>
     let eventSource = null;
     let retryCount = 0;
@@ -102,6 +129,7 @@
     function startSearch() {
         const pin = document.getElementById('pin-input').value.trim();
         const date = document.getElementById('date-input').value;
+        const prefix = document.getElementById('prefix-select').value;
         
         if (!pin) {
             statusElement.innerHTML = '<span class="error">Please enter a PIN to search</span>';
@@ -111,7 +139,7 @@
         cleanupConnection();
         
         resultsElement.textContent = '';
-        statusElement.textContent = 'Starting large-scale search...';
+        statusElement.textContent = 'Starting search...';
         retryCount = 0;
         lastMessageTime = Date.now();
         isExplicitClose = false;
@@ -119,20 +147,21 @@
         matchesFound = 0;
         stopButton.style.display = 'inline-block';
         
-        currentSearchUrl = window.location.hostname === 'localhost' 
-            ? `http://localhost:5000/search?pin=${encodeURIComponent(pin)}&date=${encodeURIComponent(date)}`
-            : `/search?pin=${encodeURIComponent(pin)}&date=${encodeURIComponent(date)}`;
+        currentSearchUrl = window.location.hostname === '192.168.88.24' 
+            ? `http://192.168.88.24:5000/search?pin=${encodeURIComponent(pin)}&date=${encodeURIComponent(date)}&prefix=${encodeURIComponent(prefix)}`
+            : `/search?pin=${encodeURIComponent(pin)}&date=${encodeURIComponent(date)}&prefix=${encodeURIComponent(prefix)}`;
         
+        console.log("Search URL:", currentSearchUrl); // Debug log
         connectEventSource(currentSearchUrl);
     }
 
+    // Rest of the JavaScript remains the same...
     function connectEventSource(url) {
         eventSource = new EventSource(url);
         
-        // Heartbeat check every 10 seconds
         heartbeatInterval = setInterval(() => {
             const timeSinceLastMessage = Date.now() - lastMessageTime;
-            if (timeSinceLastMessage > 45000 && !isExplicitClose) { // 45 seconds
+            if (timeSinceLastMessage > 45000 && !isExplicitClose) {
                 statusElement.textContent = `Connection inactive (${Math.round(timeSinceLastMessage/1000)}s), reconnecting...`;
                 cleanupConnection();
                 scheduleReconnect(url);
@@ -205,7 +234,7 @@
     function scheduleReconnect(url) {
         if (retryCount < maxRetries) {
             retryCount++;
-            const delay = Math.min(2000 * retryCount, 30000); // 2s, 4s, 6s... max 30s
+            const delay = Math.min(2000 * retryCount, 30000);
             statusElement.textContent += ` (Retry ${retryCount}/${maxRetries} in ${delay/1000}s)`;
             reconnectTimeout = setTimeout(() => connectEventSource(url), delay);
         } else {
@@ -230,6 +259,5 @@
     // Clean up when page unloads
     window.addEventListener('beforeunload', cleanupConnection);
 </script>
-
 </body>
 </html>
